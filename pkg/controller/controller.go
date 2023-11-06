@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"time"
+	"sort"
 
 	"github.com/practo/klog/v2"
 	"github.com/prometheus/client_golang/prometheus"
@@ -509,7 +510,7 @@ func (c *Controller) syncHandler(ctx context.Context, event WokerPodAutoScalerEv
 		} else if op == ScaleDown {
 			c.scaleDownDeployment(
 				ctx,
-				workerPodAutoScaler.Namespace, deploymentName, desiredWorkers)
+				workerPodAutoScaler.Namespace, deploymentName, currentWorkers, desiredWorkers)
 		}
 
 		now := metav1.Now()
@@ -573,7 +574,7 @@ func (c *Controller) updateDeployment(ctx context.Context, namespace string, dep
 }
 
 // scaleDownDeployment scales down the Deployment by removing completed pods.
-func (c *Controller) scaleDownDeployment(ctx context.Context, namespace string, deploymentName string, desiredWorkers int32) error {
+func (c *Controller) scaleDownDeployment(ctx context.Context, namespace string, deploymentName string, currentWorkers int32, desiredWorkers int32) error {
 	pods, err := c.kubeclientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Errorf("Failed to list pods: %v", err)
