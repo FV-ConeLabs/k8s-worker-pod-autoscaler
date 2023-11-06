@@ -502,14 +502,14 @@ func (c *Controller) syncHandler(ctx context.Context, event WokerPodAutoScalerEv
 	)
 
 	if op == ScaleUp || op == ScaleDown {
-		if deploymentName != "" {
+		if op == ScaleUp {
 			c.updateDeployment(
 				ctx,
 				workerPodAutoScaler.Namespace, deploymentName, &desiredWorkers)
-		} else {
-			c.updateReplicaSet(
+		} else if op == ScaleDown {
+			c.scaleDownDeployment(
 				ctx,
-				workerPodAutoScaler.Namespace, replicaSetName, &desiredWorkers)
+				workerPodAutoScaler.Namespace, deploymentName, desiredWorkers)
 		}
 
 		now := metav1.Now()
@@ -570,6 +570,49 @@ func (c *Controller) updateDeployment(ctx context.Context, namespace string, dep
 	if retryErr != nil {
 		klog.Fatalf("Failed to update deployment (retry failed): %v", retryErr)
 	}
+}
+
+// scaleDownDeployment scales down the Deployment by removing completed pods.
+func (c *Controller) scaleDownDeployment(ctx context.Context, namespace string, deploymentName string, desiredWorkers int32) error {
+	pods, err := c.kubeclientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		klog.Errorf("Failed to list pods: %v", err)
+		return err
+	}
+
+	completedPods := []*corev1.Pod{}
+
+	// Filter for pods that have the completed job-status annotation.
+	for _, pod := range pods.Items {
+		if pod.Annotations != nil && pod.Annotations["job-status"] == "completed" {
+			completedPods = append(completedPods, &pod)
+		}
+	}
+
+	// Calculate how many pods need to be deleted.
+	podsToDeleteCount := int32(len(completedPods)) - (currentWorkers - desiredWorkers)
+
+	// Sort completed pods by creation timestamp, oldest first.
+	sort.Slice(completedPods, func(i, j int) bool {
+		return completedPods[i].CreationTimestamp.Before(&completedPods[j].CreationTimestamp)
+	})
+
+	for _, pod := range completedPods {
+		if podsToDeleteCount <= 0 {
+			break
+		}
+
+		// Delete the pod
+		if err := c.kubeclientset.CoreV1().Pods(namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+			klog.Errorf("Failed to delete pod %s: %v", pod.Name, err)
+			return err
+		} else {
+			klog.Infof("Deleted completed pod %s", pod.Name)
+			podsToDeleteCount--
+		}
+	}
+
+	return nil
 }
 
 // updateReplicaSet updates the ReplicaSet with the desired number of replicas
